@@ -1,0 +1,177 @@
+name: Build and Deploy LibreChat
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '22'
+  DEPLOY_HOST: 'chat.alma.com.do'
+  DEPLOY_USER: 'itxl0055'
+  DEPLOY_PATH: '/home/itxl0055/public_html/alma.com.do/chat'
+  VENV_PATH: '/home/itxl0055/nodevenv/public_html/alma.com.do/chat/22'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Create temporary environment file for build
+      run: |
+        # Create a temporary .env for the build process if one doesn't exist
+        if [ ! -f .env ]; then
+          cp .env.example .env
+        fi
+        
+    - name: Build frontend
+      run: npm run frontend
+        
+    - name: Create deployment archive
+      run: |
+        # Create archive with all necessary files for LibreChat
+        # Exclude .env from archive to preserve server configuration
+        tar -czf librechat-build.tar.gz \
+          --exclude=node_modules \
+          --exclude=.git \
+          --exclude=.github \
+          --exclude=*.log \
+          --exclude=.env.local \
+          --exclude=.env.development \
+          --exclude=.env \
+          .
+        
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: librechat-build
+        path: librechat-build.tar.gz
+        retention-days: 1
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    
+    steps:
+    - name: Download build artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: librechat-build
+        
+    - name: Setup SSH
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        # For shared hosting, we might need to use a different port
+        # ssh-keyscan -H ${{ env.DEPLOY_HOST }} >> ~/.ssh/known_hosts
+        # Accept host key automatically (use with caution)
+        echo "StrictHostKeyChecking no" >> ~/.ssh/config
+        
+    - name: Deploy to server
+      run: |
+        # Upload the build archive
+        scp librechat-build.tar.gz ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }}:/tmp/
+        
+        # Execute deployment commands on remote server
+        ssh ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} << 'EOF'
+          set -e
+          
+          # Function to enter virtual environment and run commands
+          run_in_venv() {
+            source ${{ env.VENV_PATH }}/bin/activate && cd ${{ env.DEPLOY_PATH }} && "$@"
+          }
+          
+          # Create backup of current deployment
+          if [ -d "${{ env.DEPLOY_PATH }}" ]; then
+            cp -r ${{ env.DEPLOY_PATH }} ${{ env.DEPLOY_PATH }}.backup.$(date +%Y%m%d_%H%M%S)
+          fi
+          
+          # Create temporary directory for new files
+          TEMP_DIR="/tmp/librechat-deploy-$(date +%Y%m%d_%H%M%S)"
+          mkdir -p $TEMP_DIR
+          
+          # Extract new build to temporary directory
+          cd $TEMP_DIR
+          tar -xzf /tmp/librechat-build.tar.gz
+          
+          # Preserve existing .env file if it exists
+          if [ -f "${{ env.DEPLOY_PATH }}/.env" ]; then
+            echo "Preserving existing .env configuration..."
+            cp "${{ env.DEPLOY_PATH }}/.env" "$TEMP_DIR/.env"
+          else
+            echo "Creating initial .env from example..."
+            cp .env.example .env
+            echo "⚠️  IMPORTANT: Configure your .env file with proper MONGO_URI and other settings!"
+          fi
+          
+          # Create deployment directory
+          mkdir -p ${{ env.DEPLOY_PATH }}
+          
+          # Move files to deployment directory
+          cp -r $TEMP_DIR/* ${{ env.DEPLOY_PATH }}/
+          
+          # Navigate to deployment directory and activate virtual environment
+          cd ${{ env.DEPLOY_PATH }}
+          source ${{ env.VENV_PATH }}/bin/activate
+          
+          # Install production dependencies in virtual environment
+          npm ci
+          
+          # Stop existing LibreChat process (if running)
+          # For shared hosting, we need to be more careful about process management
+          pkill -f "npm run backend" || true
+          pkill -f "node.*app.js" || true
+          
+          # For cPanel/shared hosting, we might need to use different startup method
+          # Check if there's a startup script or use node directly
+          if [ -f "app.js" ]; then
+            # Start with node directly
+            nohup node app.js > librechat.log 2>&1 &
+          else
+            # Start with npm script
+            nohup npm run backend > librechat.log 2>&1 &
+          fi
+          
+          # Wait for startup
+          sleep 15
+          
+          # Health check
+          if curl -f https://chat.alma.com.do/ 2>/dev/null; then
+            echo "✅ Deployment successful - LibreChat is responding at https://chat.alma.com.do"
+          else
+            echo "⚠️  Warning: Health check failed. Check logs: tail -f ${{ env.DEPLOY_PATH }}/librechat.log"
+            echo "💡 You may need to restart the Node.js app through cPanel"
+          fi
+          
+          # Cleanup
+          rm -rf $TEMP_DIR
+          rm -f /tmp/librechat-build.tar.gz
+          
+          echo "🎉 Deployment completed!"
+          echo "📱 cPanel: You may need to restart your Node.js app through cPanel interface"
+          echo "🌐 URL: https://chat.alma.com.do"
+          echo "📋 Logs: ${{ env.DEPLOY_PATH }}/librechat.log"
+        EOF
+        
+    - name: Deployment notification
+      if: always()
+      run: |
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "✅ Deployment completed successfully to ${{ env.DEPLOY_HOST }}"
+        else
+          echo "❌ Deployment failed to ${{ env.DEPLOY_HOST }}"
+        fi
