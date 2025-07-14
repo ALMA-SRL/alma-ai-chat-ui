@@ -302,7 +302,7 @@ jobs:
         echo "ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
         
     - name: Add IP to cPanel SSH Access (if SSH secrets provided)
-      if: ${{ secrets.CPANEL_API_TOKEN }}
+      if: "${{ secrets.CPANEL_API_TOKEN != '' }}"
       run: |
         # Add current IP to SSH access list using cPanel API
         curl -H "Authorization: cpanel ${{ env.CPANEL_USER }}:${{ secrets.CPANEL_API_TOKEN }}" \
