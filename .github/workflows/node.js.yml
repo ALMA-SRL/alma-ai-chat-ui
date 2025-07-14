@@ -29,20 +29,161 @@ jobs:
     - name: Install dependencies
       run: npm ci
       
-    - name: Create temporary environment file for build
+    - name: Create build environment file
       run: |
-        # Create a temporary .env for the build process if one doesn't exist
+        # Create a temporary .env for the build process
         if [ ! -f .env ]; then
           cp .env.example .env
         fi
         
+        # Add build-specific environment variables if provided
+        if [ -n "${{ secrets.VITE_APP_TITLE }}" ]; then
+          echo "VITE_APP_TITLE=${{ secrets.VITE_APP_TITLE }}" >> .env
+        fi
+        if [ -n "${{ secrets.VITE_CUSTOM_FOOTER }}" ]; then
+          echo "VITE_CUSTOM_FOOTER=${{ secrets.VITE_CUSTOM_FOOTER }}" >> .env
+        fi
+        
     - name: Build frontend
       run: npm run frontend
-        
-    - name: Create deployment archive
+      
+    - name: Build backend (if needed)
       run: |
-        # Create archive with all necessary files for LibreChat
-        # Exclude .env from archive to preserve server configuration
+        if [ -f "package.json" ] && grep -q "backend" package.json; then
+          npm run backend:build || echo "Backend build script not found, skipping..."
+        fi
+        
+    - name: Create deployment package
+      run: |
+        # Create deployment directory
+        mkdir -p deploy-package
+        
+        # Copy built client files
+        if [ -d "client/dist" ]; then
+          cp -r client/dist/* deploy-package/
+        elif [ -d "dist" ]; then
+          cp -r dist/* deploy-package/
+        elif [ -d "build" ]; then
+          cp -r build/* deploy-package/
+        fi
+        
+        # Copy server files and configurations
+        cp -r api deploy-package/ 2>/dev/null || echo "No api directory found"
+        cp package*.json deploy-package/
+        cp .env.example deploy-package/
+        
+        # Copy additional necessary files
+        cp -r config deploy-package/ 2>/dev/null || echo "No config directory"
+        cp -r docs deploy-package/ 2>/dev/null || echo "No docs directory"
+        cp -r images deploy-package/ 2>/dev/null || echo "No images directory"
+        cp -r client/public deploy-package/public 2>/dev/null || echo "No public directory"
+        
+        # Copy important root files
+        cp *.md deploy-package/ 2>/dev/null || true
+        cp LICENSE deploy-package/ 2>/dev/null || true
+        
+        # Create .htaccess for proper routing
+        cat > deploy-package/.htaccess << 'EOF'
+        RewriteEngine On
+        RewriteBase /
+        
+        # Handle React/Vue routing
+        RewriteCond %{REQUEST_FILENAME} !-f
+        RewriteCond %{REQUEST_FILENAME} !-d
+        RewriteCond %{REQUEST_URI} !^/api/
+        RewriteRule ^(.*)$ /index.html [QSA,L]
+        
+        # API routing (if backend is served from same domain)
+        RewriteCond %{REQUEST_URI} ^/api/
+        RewriteRule ^api/(.*)$ /api/$1 [QSA,L]
+        
+        # Set proper MIME types
+        AddType text/javascript .js
+        AddType text/css .css
+        AddType application/json .json
+        AddType application/wasm .wasm
+        
+        # Security headers
+        <IfModule mod_headers.c>
+            Header always set X-Content-Type-Options nosniff
+            Header always set X-Frame-Options DENY
+            Header always set X-XSS-Protection "1; mode=block"
+            Header always set Referrer-Policy "strict-origin-when-cross-origin"
+        </IfModule>
+        
+        # Enable compression
+        <IfModule mod_deflate.c>
+            AddOutputFilterByType DEFLATE text/plain
+            AddOutputFilterByType DEFLATE text/html
+            AddOutputFilterByType DEFLATE text/xml
+            AddOutputFilterByType DEFLATE text/css
+            AddOutputFilterByType DEFLATE application/xml
+            AddOutputFilterByType DEFLATE application/xhtml+xml
+            AddOutputFilterByType DEFLATE application/rss+xml
+            AddOutputFilterByType DEFLATE application/javascript
+            AddOutputFilterByType DEFLATE application/x-javascript
+            AddOutputFilterByType DEFLATE application/json
+        </IfModule>
+        
+        # Cache static assets
+        <IfModule mod_expires.c>
+            ExpiresActive On
+            ExpiresByType text/css "access plus 1 year"
+            ExpiresByType application/javascript "access plus 1 year"
+            ExpiresByType text/javascript "access plus 1 year"
+            ExpiresByType image/png "access plus 1 year"
+            ExpiresByType image/jpg "access plus 1 year"
+            ExpiresByType image/jpeg "access plus 1 year"
+            ExpiresByType image/gif "access plus 1 year"
+            ExpiresByType image/svg+xml "access plus 1 year"
+            ExpiresByType image/webp "access plus 1 year"
+            ExpiresByType image/x-icon "access plus 1 year"
+            ExpiresByType font/woff "access plus 1 year"
+            ExpiresByType font/woff2 "access plus 1 year"
+            ExpiresByType application/wasm "access plus 1 year"
+        </IfModule>
+        
+        # Disable directory browsing
+        Options -Indexes
+        
+        # Protect sensitive files
+        <Files ~ "^\.env">
+            Order allow,deny
+            Deny from all
+        </Files>
+        
+        <Files ~ "^\..*">
+            Order allow,deny
+            Deny from all
+        </Files>
+        EOF
+        
+        # Create web.config for IIS (if needed)
+        cat > deploy-package/web.config << 'EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <system.webServer>
+            <rewrite>
+              <rules>
+                <rule name="LibreChat Routes" stopProcessing="true">
+                  <match url=".*" />
+                  <conditions logicalGrouping="MatchAll">
+                    <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="true" />
+                    <add input="{REQUEST_FILENAME}" matchType="IsDirectory" negate="true" />
+                    <add input="{REQUEST_URI}" pattern="^/api/" negate="true" />
+                  </conditions>
+                  <action type="Rewrite" url="/" />
+                </rule>
+              </rules>
+            </rewrite>
+            <staticContent>
+              <mimeMap fileExtension=".wasm" mimeType="application/wasm" />
+            </staticContent>
+          </system.webServer>
+        </configuration>
+        EOF
+        
+        # Create archive with deployment package
         tar -czf librechat-build.tar.gz \
           --exclude=node_modules \
           --exclude=.git \
@@ -50,8 +191,7 @@ jobs:
           --exclude=*.log \
           --exclude=.env.local \
           --exclude=.env.development \
-          --exclude=.env \
-          .
+          deploy-package/
         
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
@@ -76,9 +216,6 @@ jobs:
         mkdir -p ~/.ssh
         echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
         chmod 600 ~/.ssh/id_rsa
-        # For shared hosting, we might need to use a different port
-        # ssh-keyscan -H ${{ env.DEPLOY_HOST }} >> ~/.ssh/known_hosts
-        # Accept host key automatically (use with caution)
         echo "StrictHostKeyChecking no" >> ~/.ssh/config
         
     - name: Deploy to server
@@ -97,7 +234,12 @@ jobs:
           
           # Create backup of current deployment
           if [ -d "${{ env.DEPLOY_PATH }}" ]; then
-            cp -r ${{ env.DEPLOY_PATH }} ${{ env.DEPLOY_PATH }}.backup.$(date +%Y%m%d_%H%M%S)
+            BACKUP_DIR="${{ env.DEPLOY_PATH }}.backup.$(date +%Y%m%d_%H%M%S)"
+            echo "Creating backup at $BACKUP_DIR..."
+            cp -r ${{ env.DEPLOY_PATH }} $BACKUP_DIR
+            
+            # Keep only last 5 backups
+            ls -dt ${{ env.DEPLOY_PATH }}.backup.* | tail -n +6 | xargs rm -rf
           fi
           
           # Create temporary directory for new files
@@ -108,18 +250,42 @@ jobs:
           cd $TEMP_DIR
           tar -xzf /tmp/librechat-build.tar.gz
           
+          # Move extracted files out of deploy-package subdirectory
+          if [ -d "deploy-package" ]; then
+            mv deploy-package/* .
+            rmdir deploy-package
+          fi
+          
+          # Create deployment directory
+          mkdir -p ${{ env.DEPLOY_PATH }}
+          
           # Preserve existing .env file if it exists
           if [ -f "${{ env.DEPLOY_PATH }}/.env" ]; then
             echo "Preserving existing .env configuration..."
             cp "${{ env.DEPLOY_PATH }}/.env" "$TEMP_DIR/.env"
           else
             echo "Creating initial .env from example..."
-            cp .env.example .env
+            if [ -f ".env.example" ]; then
+              cp .env.example .env
+            else
+              echo "# LibreChat Configuration" > .env
+              echo "DOMAIN_CLIENT=https://chat.alma.com.do" >> .env
+              echo "DOMAIN_SERVER=https://chat.alma.com.do" >> .env
+              echo "MONGO_URI=mongodb://localhost:27017/LibreChat" >> .env
+              echo "JWT_SECRET=your-jwt-secret-key" >> .env
+              echo "JWT_REFRESH_SECRET=your-jwt-refresh-secret-key" >> .env
+              echo "CREDS_KEY=your-32-byte-key-for-credentials-encryption" >> .env
+              echo "CREDS_IV=your-16-byte-iv-for-credentials-encryption" >> .env
+            fi
             echo "⚠️  IMPORTANT: Configure your .env file with proper MONGO_URI and other settings!"
           fi
           
-          # Create deployment directory
-          mkdir -p ${{ env.DEPLOY_PATH }}
+          # Stop existing LibreChat process (if running)
+          echo "Stopping existing LibreChat processes..."
+          pkill -f "npm run backend" || true
+          pkill -f "node.*app.js" || true
+          pkill -f "librechat" || true
+          sleep 5
           
           # Move files to deployment directory
           cp -r $TEMP_DIR/* ${{ env.DEPLOY_PATH }}/
@@ -129,31 +295,60 @@ jobs:
           source ${{ env.VENV_PATH }}/bin/activate
           
           # Install production dependencies in virtual environment
-          npm ci
+          echo "Installing dependencies..."
+          npm ci --omit=dev
           
-          # Stop existing LibreChat process (if running)
-          # For shared hosting, we need to be more careful about process management
-          pkill -f "npm run backend" || true
-          pkill -f "node.*app.js" || true
+          # Set proper permissions
+          chmod +x ${{ env.DEPLOY_PATH }}/*.js 2>/dev/null || true
+          chmod 644 ${{ env.DEPLOY_PATH }}/.htaccess 2>/dev/null || true
           
-          # For cPanel/shared hosting, we might need to use different startup method
-          # Check if there's a startup script or use node directly
-          if [ -f "app.js" ]; then
-            # Start with node directly
-            nohup node app.js > librechat.log 2>&1 &
-          else
-            # Start with npm script
+          # For shared hosting, try different startup methods
+          echo "Starting LibreChat..."
+          
+          # Method 1: Try starting with npm script
+          if [ -f "package.json" ] && grep -q "backend" package.json; then
+            echo "Starting with npm run backend..."
             nohup npm run backend > librechat.log 2>&1 &
+            BACKEND_PID=$!
+          # Method 2: Try starting with app.js directly
+          elif [ -f "app.js" ]; then
+            echo "Starting with node app.js..."
+            nohup node app.js > librechat.log 2>&1 &
+            BACKEND_PID=$!
+          # Method 3: Try starting with api/server.js
+          elif [ -f "api/server.js" ]; then
+            echo "Starting with node api/server.js..."
+            nohup node api/server.js > librechat.log 2>&1 &
+            BACKEND_PID=$!
+          else
+            echo "No suitable startup script found. You may need to start manually through cPanel."
+            BACKEND_PID=""
           fi
           
           # Wait for startup
-          sleep 15
+          if [ -n "$BACKEND_PID" ]; then
+            echo "Waiting for LibreChat to start (PID: $BACKEND_PID)..."
+            sleep 20
+            
+            # Check if process is still running
+            if kill -0 $BACKEND_PID 2>/dev/null; then
+              echo "✅ LibreChat process is running"
+            else
+              echo "❌ LibreChat process died. Check logs:"
+              tail -20 librechat.log
+            fi
+          fi
           
           # Health check
-          if curl -f https://chat.alma.com.do/ 2>/dev/null; then
+          echo "Performing health check..."
+          if curl -f -s -I https://chat.alma.com.do/ | grep -q "200 OK"; then
             echo "✅ Deployment successful - LibreChat is responding at https://chat.alma.com.do"
           else
-            echo "⚠️  Warning: Health check failed. Check logs: tail -f ${{ env.DEPLOY_PATH }}/librechat.log"
+            echo "⚠️  Warning: Health check failed. Checking logs..."
+            if [ -f "librechat.log" ]; then
+              echo "Last 20 lines of log:"
+              tail -20 librechat.log
+            fi
             echo "💡 You may need to restart the Node.js app through cPanel"
           fi
           
@@ -165,13 +360,55 @@ jobs:
           echo "📱 cPanel: You may need to restart your Node.js app through cPanel interface"
           echo "🌐 URL: https://chat.alma.com.do"
           echo "📋 Logs: ${{ env.DEPLOY_PATH }}/librechat.log"
+          echo "🔧 Environment: ${{ env.DEPLOY_PATH }}/.env"
+          
+          # Show current running processes
+          echo "Current LibreChat processes:"
+          ps aux | grep -E "(node|npm)" | grep -v grep || echo "No Node.js processes found"
         EOF
+        
+    - name: Deploy via FTP (fallback)
+      if: failure()
+      uses: SamKirkland/FTP-Deploy-Action@v4.3.4
+      with:
+        server: ${{ secrets.FTP_SERVER }}
+        username: ${{ secrets.FTP_USERNAME }}
+        password: ${{ secrets.FTP_PASSWORD }}
+        port: ${{ secrets.FTP_PORT || 21 }}
+        protocol: ${{ secrets.FTP_PROTOCOL || 'ftp' }}
+        local-dir: ./deploy-package/
+        server-dir: ${{ secrets.FTP_SERVER_DIR || '/public_html/' }}
+        exclude: |
+          **/.git*
+          **/.git*/**
+          **/node_modules/**
+          **/.env.local
+          **/.env.development
+          **/.env.test
+          **/.env.production.local
+          **/npm-debug.log*
+          **/yarn-debug.log*
+          **/yarn-error.log*
+          **/.DS_Store
+          **/Thumbs.db
         
     - name: Deployment notification
       if: always()
       run: |
         if [ "${{ job.status }}" == "success" ]; then
           echo "✅ Deployment completed successfully to ${{ env.DEPLOY_HOST }}"
+          echo "🌐 Site: https://chat.alma.com.do"
+          echo "📝 Next steps:"
+          echo "   1. Verify your .env configuration"
+          echo "   2. Check MongoDB connection"
+          echo "   3. Configure API keys as needed"
+          echo "   4. Test the application"
         else
           echo "❌ Deployment failed to ${{ env.DEPLOY_HOST }}"
+          echo "🔍 Check the logs above for details"
+          echo "💡 Common issues:"
+          echo "   - SSH key not configured"
+          echo "   - Node.js version mismatch"
+          echo "   - MongoDB connection issues"
+          echo "   - Missing environment variables"
         fi
