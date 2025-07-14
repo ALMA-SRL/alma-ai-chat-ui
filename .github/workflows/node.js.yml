@@ -1,4 +1,4 @@
-name: Build and Deploy LibreChat
+name: Build and Deploy LibreChat (cPanel)
 
 on:
   push:
@@ -7,10 +7,11 @@ on:
 
 env:
   NODE_VERSION: '22'
-  DEPLOY_HOST: 'chat.alma.com.do'
-  DEPLOY_USER: 'itxl0055'
+  CPANEL_HOST: 'chat.alma.com.do'
+  CPANEL_USER: 'itxl0055'
   DEPLOY_PATH: '/home/itxl0055/public_html/alma.com.do/chat'
   VENV_PATH: '/home/itxl0055/nodevenv/public_html/alma.com.do/chat/22'
+  SITE_URL: 'https://chat.alma.com.do'
 
 jobs:
   build:
@@ -36,26 +37,18 @@ jobs:
           cp .env.example .env
         fi
         
-        # Add build-specific environment variables if provided
-        if [ -n "${{ secrets.VITE_APP_TITLE }}" ]; then
-          echo "VITE_APP_TITLE=${{ secrets.VITE_APP_TITLE }}" >> .env
-        fi
-        if [ -n "${{ secrets.VITE_CUSTOM_FOOTER }}" ]; then
-          echo "VITE_CUSTOM_FOOTER=${{ secrets.VITE_CUSTOM_FOOTER }}" >> .env
-        fi
+        # Add build-specific environment variables
+        echo "VITE_APP_TITLE=LibreChat - Alma" >> .env
+        echo "VITE_CUSTOM_FOOTER=Powered by LibreChat" >> .env
+        echo "DOMAIN_CLIENT=${{ env.SITE_URL }}" >> .env
+        echo "DOMAIN_SERVER=${{ env.SITE_URL }}" >> .env
         
     - name: Build frontend
       run: npm run frontend
       
-    - name: Build backend (if needed)
-      run: |
-        if [ -f "package.json" ] && grep -q "backend" package.json; then
-          npm run backend:build || echo "Backend build script not found, skipping..."
-        fi
-        
     - name: Create deployment package
       run: |
-        # Create deployment directory
+        # Create deployment directory structure
         mkdir -p deploy-package
         
         # Copy built client files
@@ -73,16 +66,66 @@ jobs:
         cp .env.example deploy-package/
         
         # Copy additional necessary files
-        cp -r config deploy-package/ 2>/dev/null || echo "No config directory"
-        cp -r docs deploy-package/ 2>/dev/null || echo "No docs directory"
-        cp -r images deploy-package/ 2>/dev/null || echo "No images directory"
-        cp -r client/public deploy-package/public 2>/dev/null || echo "No public directory"
+        cp -r config deploy-package/ 2>/dev/null || true
+        cp -r docs deploy-package/ 2>/dev/null || true
+        cp -r images deploy-package/ 2>/dev/null || true
+        cp -r client/public deploy-package/public 2>/dev/null || true
         
-        # Copy important root files
-        cp *.md deploy-package/ 2>/dev/null || true
-        cp LICENSE deploy-package/ 2>/dev/null || true
+        # Create Node.js app startup file for cPanel
+        cat > deploy-package/app.js << 'EOF'
+        const express = require('express');
+        const path = require('path');
+        const { createProxyMiddleware } = require('http-proxy-middleware');
         
-        # Create .htaccess for proper routing
+        const app = express();
+        const PORT = process.env.PORT || 3000;
+        
+        // Serve static files
+        app.use(express.static(path.join(__dirname, '/')));
+        
+        // API proxy (if backend is separate)
+        if (process.env.BACKEND_URL) {
+          app.use('/api', createProxyMiddleware({
+            target: process.env.BACKEND_URL,
+            changeOrigin: true,
+            pathRewrite: {
+              '^/api': '/api'
+            }
+          }));
+        }
+        
+        // Handle React routing
+        app.get('*', (req, res) => {
+          res.sendFile(path.join(__dirname, 'index.html'));
+        });
+        
+        app.listen(PORT, () => {
+          console.log(`LibreChat frontend server running on port ${PORT}`);
+        });
+        EOF
+        
+        # Create package.json for Node.js app
+        cat > deploy-package/package.json << 'EOF'
+        {
+          "name": "librechat-frontend",
+          "version": "1.0.0",
+          "description": "LibreChat Frontend Application",
+          "main": "app.js",
+          "scripts": {
+            "start": "node app.js",
+            "backend": "node api/server.js"
+          },
+          "dependencies": {
+            "express": "^4.18.2",
+            "http-proxy-middleware": "^2.0.6"
+          },
+          "engines": {
+            "node": ">=18.0.0"
+          }
+        }
+        EOF
+        
+        # Create .htaccess for Apache
         cat > deploy-package/.htaccess << 'EOF'
         RewriteEngine On
         RewriteBase /
@@ -93,10 +136,6 @@ jobs:
         RewriteCond %{REQUEST_URI} !^/api/
         RewriteRule ^(.*)$ /index.html [QSA,L]
         
-        # API routing (if backend is served from same domain)
-        RewriteCond %{REQUEST_URI} ^/api/
-        RewriteRule ^api/(.*)$ /api/$1 [QSA,L]
-        
         # Set proper MIME types
         AddType text/javascript .js
         AddType text/css .css
@@ -106,23 +145,17 @@ jobs:
         # Security headers
         <IfModule mod_headers.c>
             Header always set X-Content-Type-Options nosniff
-            Header always set X-Frame-Options DENY
+            Header always set X-Frame-Options SAMEORIGIN
             Header always set X-XSS-Protection "1; mode=block"
             Header always set Referrer-Policy "strict-origin-when-cross-origin"
+            Header always set Content-Security-Policy "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; img-src 'self' data: https:; font-src 'self' data: https:;"
         </IfModule>
         
         # Enable compression
         <IfModule mod_deflate.c>
-            AddOutputFilterByType DEFLATE text/plain
-            AddOutputFilterByType DEFLATE text/html
-            AddOutputFilterByType DEFLATE text/xml
-            AddOutputFilterByType DEFLATE text/css
-            AddOutputFilterByType DEFLATE application/xml
-            AddOutputFilterByType DEFLATE application/xhtml+xml
-            AddOutputFilterByType DEFLATE application/rss+xml
-            AddOutputFilterByType DEFLATE application/javascript
-            AddOutputFilterByType DEFLATE application/x-javascript
-            AddOutputFilterByType DEFLATE application/json
+            AddOutputFilterByType DEFLATE text/plain text/html text/xml text/css
+            AddOutputFilterByType DEFLATE application/xml application/xhtml+xml application/rss+xml
+            AddOutputFilterByType DEFLATE application/javascript application/x-javascript application/json
         </IfModule>
         
         # Cache static assets
@@ -156,48 +189,96 @@ jobs:
             Order allow,deny
             Deny from all
         </Files>
+        
+        # Handle Node.js app
+        <IfModule mod_rewrite.c>
+            RewriteEngine On
+            RewriteCond %{REQUEST_FILENAME} !-f
+            RewriteCond %{REQUEST_FILENAME} !-d
+            RewriteRule ^(.*)$ /app.js [QSA,L]
+        </IfModule>
         EOF
         
-        # Create web.config for IIS (if needed)
-        cat > deploy-package/web.config << 'EOF'
-        <?xml version="1.0" encoding="utf-8"?>
-        <configuration>
-          <system.webServer>
-            <rewrite>
-              <rules>
-                <rule name="LibreChat Routes" stopProcessing="true">
-                  <match url=".*" />
-                  <conditions logicalGrouping="MatchAll">
-                    <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="true" />
-                    <add input="{REQUEST_FILENAME}" matchType="IsDirectory" negate="true" />
-                    <add input="{REQUEST_URI}" pattern="^/api/" negate="true" />
-                  </conditions>
-                  <action type="Rewrite" url="/" />
-                </rule>
-              </rules>
-            </rewrite>
-            <staticContent>
-              <mimeMap fileExtension=".wasm" mimeType="application/wasm" />
-            </staticContent>
-          </system.webServer>
-        </configuration>
+        # Create startup script for cPanel
+        cat > deploy-package/startup.sh << 'EOF'
+        #!/bin/bash
+        
+        # Navigate to app directory
+        cd /home/itxl0055/public_html/alma.com.do/chat
+        
+        # Activate Node.js virtual environment
+        source /home/itxl0055/nodevenv/public_html/alma.com.do/chat/22/bin/activate
+        
+        # Install dependencies if not present
+        if [ ! -d "node_modules" ]; then
+            npm install
+        fi
+        
+        # Start the application
+        npm start
         EOF
         
-        # Create archive with deployment package
-        tar -czf librechat-build.tar.gz \
-          --exclude=node_modules \
-          --exclude=.git \
-          --exclude=.github \
-          --exclude=*.log \
-          --exclude=.env.local \
-          --exclude=.env.development \
-          deploy-package/
+        chmod +x deploy-package/startup.sh
+        
+        # Create cPanel configuration instructions
+        cat > deploy-package/CPANEL_SETUP.md << 'EOF'
+        # cPanel Setup Instructions for LibreChat
+        
+        ## Step 1: Create Node.js App in cPanel
+        1. Login to cPanel
+        2. Go to "Node.js App" or "Node.js Selector"
+        3. Click "Create Application"
+        4. Set Node.js version to 22
+        5. Set Application root: `public_html/alma.com.do/chat`
+        6. Set Application URL: `chat.alma.com.do`
+        7. Set Application startup file: `app.js`
+        8. Click "Create"
+        
+        ## Step 2: Configure Environment Variables
+        1. In the Node.js App interface, click "Environment Variables"
+        2. Add these variables:
+           - `DOMAIN_CLIENT`: https://chat.alma.com.do
+           - `DOMAIN_SERVER`: https://chat.alma.com.do
+           - `MONGO_URI`: your-mongodb-connection-string
+           - `JWT_SECRET`: your-jwt-secret-key
+           - `JWT_REFRESH_SECRET`: your-jwt-refresh-secret
+           - `CREDS_KEY`: your-32-byte-encryption-key
+           - `CREDS_IV`: your-16-byte-iv
+           - `OPENAI_API_KEY`: your-openai-api-key (optional)
+           - `ANTHROPIC_API_KEY`: your-anthropic-api-key (optional)
+        
+        ## Step 3: Install Dependencies
+        1. In cPanel, go to "Terminal" or use SSH
+        2. Navigate to your app directory:
+           ```bash
+           cd public_html/alma.com.do/chat
+           source nodevenv/public_html/alma.com.do/chat/22/bin/activate
+           npm install
+           ```
+        
+        ## Step 4: Start/Restart Application
+        1. Go back to "Node.js App" in cPanel
+        2. Click "Restart" next to your application
+        3. Check the status - it should show "Running"
+        
+        ## Step 5: Configure Database
+        1. Set up MongoDB (local or Atlas)
+        2. Update MONGO_URI in environment variables
+        3. Restart the application
+        
+        ## Troubleshooting
+        - Check logs in cPanel Node.js App interface
+        - Verify Node.js version is 22
+        - Ensure all environment variables are set
+        - Check file permissions (755 for directories, 644 for files)
+        - Verify MongoDB connection
+        EOF
         
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
         name: librechat-build
-        path: librechat-build.tar.gz
+        path: deploy-package/
         retention-days: 1
 
   deploy:
@@ -210,174 +291,36 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: librechat-build
+        path: deploy-package/
         
-    - name: Setup SSH
+    - name: Get GitHub Actions IP
+      id: ip
       run: |
-        mkdir -p ~/.ssh
-        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-        chmod 600 ~/.ssh/id_rsa
-        echo "StrictHostKeyChecking no" >> ~/.ssh/config
+        # Get current public IP of GitHub Actions runner
+        PUBLIC_IP=$(curl -s https://api.ipify.org)
+        echo "Current IP: $PUBLIC_IP"
+        echo "ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
         
-    - name: Deploy to server
+    - name: Add IP to cPanel SSH Access (if SSH secrets provided)
+      if: ${{ secrets.CPANEL_API_TOKEN != '' }}
       run: |
-        # Upload the build archive
-        scp librechat-build.tar.gz ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }}:/tmp/
+        # Add current IP to SSH access list using cPanel API
+        curl -H "Authorization: cpanel ${{ env.CPANEL_USER }}:${{ secrets.CPANEL_API_TOKEN }}" \
+          -X POST \
+          "https://${{ env.CPANEL_HOST }}:2083/execute/SSH/authorize_keys" \
+          -d "ip=${{ steps.ip.outputs.ip }}" \
+          -d "comment=GitHub Actions Deploy" || echo "SSH IP add failed, continuing with FTP"
         
-        # Execute deployment commands on remote server
-        ssh ${{ env.DEPLOY_USER }}@${{ env.DEPLOY_HOST }} << 'EOF'
-          set -e
-          
-          # Function to enter virtual environment and run commands
-          run_in_venv() {
-            source ${{ env.VENV_PATH }}/bin/activate && cd ${{ env.DEPLOY_PATH }} && "$@"
-          }
-          
-          # Create backup of current deployment
-          if [ -d "${{ env.DEPLOY_PATH }}" ]; then
-            BACKUP_DIR="${{ env.DEPLOY_PATH }}.backup.$(date +%Y%m%d_%H%M%S)"
-            echo "Creating backup at $BACKUP_DIR..."
-            cp -r ${{ env.DEPLOY_PATH }} $BACKUP_DIR
-            
-            # Keep only last 5 backups
-            ls -dt ${{ env.DEPLOY_PATH }}.backup.* | tail -n +6 | xargs rm -rf
-          fi
-          
-          # Create temporary directory for new files
-          TEMP_DIR="/tmp/librechat-deploy-$(date +%Y%m%d_%H%M%S)"
-          mkdir -p $TEMP_DIR
-          
-          # Extract new build to temporary directory
-          cd $TEMP_DIR
-          tar -xzf /tmp/librechat-build.tar.gz
-          
-          # Move extracted files out of deploy-package subdirectory
-          if [ -d "deploy-package" ]; then
-            mv deploy-package/* .
-            rmdir deploy-package
-          fi
-          
-          # Create deployment directory
-          mkdir -p ${{ env.DEPLOY_PATH }}
-          
-          # Preserve existing .env file if it exists
-          if [ -f "${{ env.DEPLOY_PATH }}/.env" ]; then
-            echo "Preserving existing .env configuration..."
-            cp "${{ env.DEPLOY_PATH }}/.env" "$TEMP_DIR/.env"
-          else
-            echo "Creating initial .env from example..."
-            if [ -f ".env.example" ]; then
-              cp .env.example .env
-            else
-              echo "# LibreChat Configuration" > .env
-              echo "DOMAIN_CLIENT=https://chat.alma.com.do" >> .env
-              echo "DOMAIN_SERVER=https://chat.alma.com.do" >> .env
-              echo "MONGO_URI=mongodb://localhost:27017/LibreChat" >> .env
-              echo "JWT_SECRET=your-jwt-secret-key" >> .env
-              echo "JWT_REFRESH_SECRET=your-jwt-refresh-secret-key" >> .env
-              echo "CREDS_KEY=your-32-byte-key-for-credentials-encryption" >> .env
-              echo "CREDS_IV=your-16-byte-iv-for-credentials-encryption" >> .env
-            fi
-            echo "⚠️  IMPORTANT: Configure your .env file with proper MONGO_URI and other settings!"
-          fi
-          
-          # Stop existing LibreChat process (if running)
-          echo "Stopping existing LibreChat processes..."
-          pkill -f "npm run backend" || true
-          pkill -f "node.*app.js" || true
-          pkill -f "librechat" || true
-          sleep 5
-          
-          # Move files to deployment directory
-          cp -r $TEMP_DIR/* ${{ env.DEPLOY_PATH }}/
-          
-          # Navigate to deployment directory and activate virtual environment
-          cd ${{ env.DEPLOY_PATH }}
-          source ${{ env.VENV_PATH }}/bin/activate
-          
-          # Install production dependencies in virtual environment
-          echo "Installing dependencies..."
-          npm ci --omit=dev
-          
-          # Set proper permissions
-          chmod +x ${{ env.DEPLOY_PATH }}/*.js 2>/dev/null || true
-          chmod 644 ${{ env.DEPLOY_PATH }}/.htaccess 2>/dev/null || true
-          
-          # For shared hosting, try different startup methods
-          echo "Starting LibreChat..."
-          
-          # Method 1: Try starting with npm script
-          if [ -f "package.json" ] && grep -q "backend" package.json; then
-            echo "Starting with npm run backend..."
-            nohup npm run backend > librechat.log 2>&1 &
-            BACKEND_PID=$!
-          # Method 2: Try starting with app.js directly
-          elif [ -f "app.js" ]; then
-            echo "Starting with node app.js..."
-            nohup node app.js > librechat.log 2>&1 &
-            BACKEND_PID=$!
-          # Method 3: Try starting with api/server.js
-          elif [ -f "api/server.js" ]; then
-            echo "Starting with node api/server.js..."
-            nohup node api/server.js > librechat.log 2>&1 &
-            BACKEND_PID=$!
-          else
-            echo "No suitable startup script found. You may need to start manually through cPanel."
-            BACKEND_PID=""
-          fi
-          
-          # Wait for startup
-          if [ -n "$BACKEND_PID" ]; then
-            echo "Waiting for LibreChat to start (PID: $BACKEND_PID)..."
-            sleep 20
-            
-            # Check if process is still running
-            if kill -0 $BACKEND_PID 2>/dev/null; then
-              echo "✅ LibreChat process is running"
-            else
-              echo "❌ LibreChat process died. Check logs:"
-              tail -20 librechat.log
-            fi
-          fi
-          
-          # Health check
-          echo "Performing health check..."
-          if curl -f -s -I https://chat.alma.com.do/ | grep -q "200 OK"; then
-            echo "✅ Deployment successful - LibreChat is responding at https://chat.alma.com.do"
-          else
-            echo "⚠️  Warning: Health check failed. Checking logs..."
-            if [ -f "librechat.log" ]; then
-              echo "Last 20 lines of log:"
-              tail -20 librechat.log
-            fi
-            echo "💡 You may need to restart the Node.js app through cPanel"
-          fi
-          
-          # Cleanup
-          rm -rf $TEMP_DIR
-          rm -f /tmp/librechat-build.tar.gz
-          
-          echo "🎉 Deployment completed!"
-          echo "📱 cPanel: You may need to restart your Node.js app through cPanel interface"
-          echo "🌐 URL: https://chat.alma.com.do"
-          echo "📋 Logs: ${{ env.DEPLOY_PATH }}/librechat.log"
-          echo "🔧 Environment: ${{ env.DEPLOY_PATH }}/.env"
-          
-          # Show current running processes
-          echo "Current LibreChat processes:"
-          ps aux | grep -E "(node|npm)" | grep -v grep || echo "No Node.js processes found"
-        EOF
-        
-    - name: Deploy via FTP (fallback)
-      if: failure()
+    - name: Deploy via FTP
       uses: SamKirkland/FTP-Deploy-Action@v4.3.4
       with:
-        server: ${{ secrets.FTP_SERVER }}
-        username: ${{ secrets.FTP_USERNAME }}
+        server: ${{ env.CPANEL_HOST }}
+        username: ${{ env.CPANEL_USER }}
         password: ${{ secrets.FTP_PASSWORD }}
-        port: ${{ secrets.FTP_PORT || 21 }}
-        protocol: ${{ secrets.FTP_PROTOCOL || 'ftp' }}
+        port: 21
+        protocol: ftp
         local-dir: ./deploy-package/
-        server-dir: ${{ secrets.FTP_SERVER_DIR || '/public_html/' }}
+        server-dir: /public_html/alma.com.do/chat/
         exclude: |
           **/.git*
           **/.git*/**
@@ -391,24 +334,69 @@ jobs:
           **/yarn-error.log*
           **/.DS_Store
           **/Thumbs.db
+          **/startup.sh
+          **/CPANEL_SETUP.md
+          
+    - name: Restart Node.js App via cPanel API
+      if: ${{ secrets.CPANEL_API_TOKEN != '' }}
+      run: |
+        # Restart Node.js application via cPanel API
+        echo "Restarting Node.js application..."
+        curl -H "Authorization: cpanel ${{ env.CPANEL_USER }}:${{ secrets.CPANEL_API_TOKEN }}" \
+          -X POST \
+          "https://${{ env.CPANEL_HOST }}:2083/execute/NodeJS/restart_app" \
+          -d "domain=chat.alma.com.do" || echo "API restart failed"
         
-    - name: Deployment notification
+        # Wait for restart
+        sleep 10
+        
+    - name: Remove IP from cPanel SSH Access (cleanup)
+      if: ${{ secrets.CPANEL_API_TOKEN != '' && always() }}
+      run: |
+        # Remove IP from SSH access list
+        curl -H "Authorization: cpanel ${{ env.CPANEL_USER }}:${{ secrets.CPANEL_API_TOKEN }}" \
+          -X POST \
+          "https://${{ env.CPANEL_HOST }}:2083/execute/SSH/delete_key" \
+          -d "ip=${{ steps.ip.outputs.ip }}" || echo "SSH IP cleanup failed"
+        
+    - name: Health Check
+      run: |
+        echo "Waiting for application to start..."
+        sleep 30
+        
+        # Check if site is responding
+        if curl -f -s -I ${{ env.SITE_URL }} | grep -q "200\|301\|302"; then
+          echo "✅ Health check passed - Site is responding"
+        else
+          echo "⚠️  Health check failed - Site may need time to start"
+        fi
+        
+    - name: Deployment Summary
       if: always()
       run: |
+        echo "📋 Deployment Summary:"
+        echo "🌐 Site URL: ${{ env.SITE_URL }}"
+        echo "📁 Deploy Path: ${{ env.DEPLOY_PATH }}"
+        echo "⚙️  Node.js Version: ${{ env.NODE_VERSION }}"
+        echo ""
         if [ "${{ job.status }}" == "success" ]; then
-          echo "✅ Deployment completed successfully to ${{ env.DEPLOY_HOST }}"
-          echo "🌐 Site: https://chat.alma.com.do"
-          echo "📝 Next steps:"
-          echo "   1. Verify your .env configuration"
-          echo "   2. Check MongoDB connection"
-          echo "   3. Configure API keys as needed"
-          echo "   4. Test the application"
+          echo "✅ Deployment completed successfully!"
+          echo ""
+          echo "🔧 Next Steps:"
+          echo "1. Login to cPanel at https://${{ env.CPANEL_HOST }}:2083"
+          echo "2. Go to 'Node.js App' section"
+          echo "3. Configure environment variables (see CPANEL_SETUP.md)"
+          echo "4. Install dependencies: npm install"
+          echo "5. Start/restart the application"
+          echo "6. Check application logs for any errors"
+          echo ""
+          echo "📚 Setup Guide: Check CPANEL_SETUP.md in your deployment directory"
         else
-          echo "❌ Deployment failed to ${{ env.DEPLOY_HOST }}"
-          echo "🔍 Check the logs above for details"
-          echo "💡 Common issues:"
-          echo "   - SSH key not configured"
-          echo "   - Node.js version mismatch"
-          echo "   - MongoDB connection issues"
-          echo "   - Missing environment variables"
+          echo "❌ Deployment failed!"
+          echo ""
+          echo "🔍 Troubleshooting:"
+          echo "1. Check FTP credentials"
+          echo "2. Verify cPanel API token (optional)"
+          echo "3. Ensure Node.js app is created in cPanel"
+          echo "4. Check file permissions on server"
         fi
