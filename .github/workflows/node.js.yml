@@ -8,7 +8,7 @@ on:
 env:
   NODE_VERSION: '22'
   CPANEL_HOST: 'chat.alma.com.do'
-  CPANEL_USER: 'itxl0055'
+  CPANEL_USER: 'librechat'
   DEPLOY_PATH: '/home/itxl0055/public_html/alma.com.do/chat'
   VENV_PATH: '/home/itxl0055/nodevenv/public_html/alma.com.do/chat/22'
   SITE_URL: 'https://chat.alma.com.do'
@@ -320,7 +320,7 @@ jobs:
         port: 21
         protocol: ftp
         local-dir: ./deploy-package/
-        server-dir: /public_html/alma.com.do/chat/
+        server-dir: /home/itxl0055/public_html/alma.com.do/chat/
         exclude: |
           **/.git*
           **/.git*/**
