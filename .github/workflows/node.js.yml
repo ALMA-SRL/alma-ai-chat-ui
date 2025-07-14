@@ -302,7 +302,7 @@ jobs:
         echo "ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
         
     - name: Add IP to cPanel SSH Access (if SSH secrets provided)
-      if: ${{ secrets.CPANEL_API_TOKEN != '' }}
+      if: ${{ secrets.CPANEL_API_TOKEN }}
       run: |
         # Add current IP to SSH access list using cPanel API
         curl -H "Authorization: cpanel ${{ env.CPANEL_USER }}:${{ secrets.CPANEL_API_TOKEN }}" \
@@ -338,7 +338,7 @@ jobs:
           **/CPANEL_SETUP.md
           
     - name: Restart Node.js App via cPanel API
-      if: ${{ secrets.CPANEL_API_TOKEN != '' }}
+      if: ${{ secrets.CPANEL_API_TOKEN }}
       run: |
         # Restart Node.js application via cPanel API
         echo "Restarting Node.js application..."
@@ -351,7 +351,7 @@ jobs:
         sleep 10
         
     - name: Remove IP from cPanel SSH Access (cleanup)
-      if: ${{ secrets.CPANEL_API_TOKEN != '' && always() }}
+      if: ${{ always() && secrets.CPANEL_API_TOKEN }}
       run: |
         # Remove IP from SSH access list
         curl -H "Authorization: cpanel ${{ env.CPANEL_USER }}:${{ secrets.CPANEL_API_TOKEN }}" \
