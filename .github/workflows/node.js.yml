@@ -9,7 +9,7 @@ env:
   NODE_VERSION: '22'
   CPANEL_HOST: 'ftp.alma.com.do'
   CPANEL_USER: 'librechat@chat.alma.com.do'
-  DEPLOY_PATH: 'chat'
+  DEPLOY_PATH: '.'
   VENV_PATH: '/home/itxl0055/nodevenv/public_html/alma.com.do/chat/22'
   SITE_URL: 'https://chat.alma.com.do'
   VITE_APP_TITLE: 'Alma AI'
@@ -233,9 +233,6 @@ jobs:
         cat > deploy-package/startup.sh << 'EOF'
         #!/bin/bash
         
-        # Navigate to app directory
-        cd chat
-        
         # Activate Node.js virtual environment
         source /home/itxl0055/nodevenv/public_html/alma.com.do/chat/22/bin/activate
         
@@ -332,7 +329,7 @@ jobs:
         port: 21
         protocol: ftp
         local-dir: ./deploy-package/
-        server-dir: chat/
+        server-dir: ${{ env.DEPLOY_PATH }}
         state-name: .ftp-deploy-sync-state.json
         dry-run: false
         log-level: minimal
