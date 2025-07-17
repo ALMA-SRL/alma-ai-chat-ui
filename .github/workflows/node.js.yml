@@ -1,4 +1,4 @@
-name: Build and Deploy LibreChat (cPanel)
+name: Build and Deploy ALMA AI (cPanel)
 
 on:
   push:
