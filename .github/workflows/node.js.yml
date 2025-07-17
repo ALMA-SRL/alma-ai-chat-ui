@@ -9,8 +9,8 @@ env:
   NODE_VERSION: '22'
   CPANEL_HOST: 'ftp.alma.com.do'
   CPANEL_USER: 'librechat@chat.alma.com.do'
-  DEPLOY_PATH: '.'
-  VENV_PATH: '/home/itxl0055/nodevenv/public_html/alma.com.do/chat/22'
+  DEPLOY_PATH: 'public_html/alma.com.do/chat/'
+  VENV_PATH: 'nodevenv/public_html/alma.com.do/chat/22'
   SITE_URL: 'https://chat.alma.com.do'
   VITE_APP_TITLE: 'Alma AI'
   VITE_CUSTOM_FOOTER: 'Powered by ALMA AI'
@@ -232,9 +232,11 @@ jobs:
         # Create startup script for cPanel
         cat > deploy-package/startup.sh << 'EOF'
         #!/bin/bash
+        # Navigate to app directory
+        cd public_html/alma.com.do/chat
         
         # Activate Node.js virtual environment
-        source /home/itxl0055/nodevenv/public_html/alma.com.do/chat/22/bin/activate
+        source nodevenv/public_html/alma.com.do/chat/22/bin/activate
         
         # Install dependencies if not present
         if [ ! -d "node_modules" ]; then
