@@ -20,7 +20,11 @@ env:
   VITE_BRAND_SECONDARY_COLOR: '#FFD700'
   DOMAIN_CLIENT: 'https://chat.alma.com.do'
   DOMAIN_SERVER: 'https://chat.alma.com.do'
-  MONGO_URI: 'your-mongodb-connection-string'
+  SMTP_HOST: 'mail.alma.com.do'
+  SMTP_PORT: '465'
+  SMTP_SECURE: 'true'
+  SMTP_USER: 'info@alma.com.do'
+  SMTP_FROM: 'info@alma.com.do'
 
 jobs:
   build:
