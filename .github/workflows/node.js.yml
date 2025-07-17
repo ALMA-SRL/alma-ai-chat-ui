@@ -57,7 +57,7 @@ jobs:
         echo "VITE_CUSTOM_FOOTER=Powered by ALMA AI" >> .env
         echo "DOMAIN_CLIENT=${{ env.SITE_URL }}" >> .env
         echo "DOMAIN_SERVER=${{ env.SITE_URL }}" >> .env
-        echo "MONGO_URI=${{ env.MONGO_URI }}" >> .env
+        # Optionally add backend env variables here if needed
         
     - name: Cache build outputs
       uses: actions/cache@v4
@@ -94,6 +94,11 @@ jobs:
         
         # Copy server files and configurations efficiently
         [ -d "api" ] && rsync -av --exclude='node_modules' --exclude='*.log' api/ deploy-package/api/
+        # Ensure backend dependencies are included
+        [ -d "api/node_modules" ] && rsync -av api/node_modules/ deploy-package/api/node_modules/
+        # Copy backend package.json if present
+        [ -f "api/package.json" ] && cp api/package.json deploy-package/api/
+        [ -f "api/package-lock.json" ] && cp api/package-lock.json deploy-package/api/
         cp package*.json deploy-package/ 2>/dev/null || true
         cp .env.example deploy-package/ 2>/dev/null || true
         
@@ -103,17 +108,21 @@ jobs:
         
         # Create Node.js app startup file for cPanel
         cat > deploy-package/app.js << 'EOF'
+        // Combined frontend and backend startup
         const express = require('express');
         const path = require('path');
         const { createProxyMiddleware } = require('http-proxy-middleware');
-        
         const app = express();
         const PORT = process.env.PORT || 3000;
-        
         // Serve static files
         app.use(express.static(path.join(__dirname, '/')));
-        
-        // API proxy (if backend is separate)
+        // Start backend server if present
+        try {
+          require('./api/server.js');
+        } catch (e) {
+          console.log('Backend server not found or not started:', e.message);
+        }
+        // API proxy (if backend is remote)
         if (process.env.BACKEND_URL) {
           app.use('/api', createProxyMiddleware({
             target: process.env.BACKEND_URL,
@@ -123,14 +132,12 @@ jobs:
             }
           }));
         }
-        
         // Handle React routing
         app.get('*', (req, res) => {
           res.sendFile(path.join(__dirname, 'index.html'));
         });
-        
         app.listen(PORT, () => {
-          console.log(`LibreChat frontend server running on port ${PORT}`);
+          console.log(`LibreChat frontend+backend server running on port ${PORT}`);
         });
         EOF
         
