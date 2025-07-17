@@ -9,9 +9,18 @@ env:
   NODE_VERSION: '22'
   CPANEL_HOST: 'ftp.alma.com.do'
   CPANEL_USER: 'librechat@chat.alma.com.do'
-  DEPLOY_PATH: '/home/itxl0055/public_html/alma.com.do/chat'
+  DEPLOY_PATH: 'chat'
   VENV_PATH: '/home/itxl0055/nodevenv/public_html/alma.com.do/chat/22'
   SITE_URL: 'https://chat.alma.com.do'
+  VITE_APP_TITLE: 'Alma AI'
+  VITE_CUSTOM_FOOTER: 'Powered by ALMA AI'
+  VITE_BRAND_NAME: 'Alma'
+  VITE_BRAND_LOGO_URL: 'https://chat.alma.com.do/logo.png'
+  VITE_BRAND_PRIMARY_COLOR: '#0057B8'
+  VITE_BRAND_SECONDARY_COLOR: '#FFD700'
+  DOMAIN_CLIENT: 'https://chat.alma.com.do'
+  DOMAIN_SERVER: 'https://chat.alma.com.do'
+  MONGO_URI: 'your-mongodb-connection-string'
 
 jobs:
   build:
@@ -56,6 +65,7 @@ jobs:
         echo "VITE_CUSTOM_FOOTER=Powered by ALMA AI" >> .env
         echo "DOMAIN_CLIENT=${{ env.SITE_URL }}" >> .env
         echo "DOMAIN_SERVER=${{ env.SITE_URL }}" >> .env
+        echo "MONGO_URI=${{ env.MONGO_URI }}" >> .env
         
     - name: Cache build outputs
       uses: actions/cache@v4
