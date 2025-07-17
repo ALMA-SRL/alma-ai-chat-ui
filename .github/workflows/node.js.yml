@@ -8,7 +8,7 @@ on:
 env:
   NODE_VERSION: '22'
   CPANEL_HOST: 'chat.alma.com.do'
-  CPANEL_USER: 'librechat'
+  CPANEL_USER: 'llibrechat@chat.alma.com.do'
   DEPLOY_PATH: '/home/itxl0055/public_html/alma.com.do/chat'
   VENV_PATH: '/home/itxl0055/nodevenv/public_html/alma.com.do/chat/22'
   SITE_URL: 'https://chat.alma.com.do'
