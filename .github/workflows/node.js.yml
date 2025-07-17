@@ -38,8 +38,8 @@ jobs:
         fi
         
         # Add build-specific environment variables
-        echo "VITE_APP_TITLE=LibreChat - Alma" >> .env
-        echo "VITE_CUSTOM_FOOTER=Powered by LibreChat" >> .env
+        echo "VITE_APP_TITLE=Alma AI" >> .env
+        echo "VITE_CUSTOM_FOOTER=Powered by ALMA AI" >> .env
         echo "DOMAIN_CLIENT=${{ env.SITE_URL }}" >> .env
         echo "DOMAIN_SERVER=${{ env.SITE_URL }}" >> .env
         
@@ -293,24 +293,6 @@ jobs:
         name: librechat-build
         path: deploy-package/
         
-    - name: Get GitHub Actions IP
-      id: ip
-      run: |
-        # Get current public IP of GitHub Actions runner
-        PUBLIC_IP=$(curl -s https://api.ipify.org)
-        echo "Current IP: $PUBLIC_IP"
-        echo "ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
-        
-    - name: Add IP to cPanel SSH Access (if SSH secrets provided)
-      if: "${{ secrets.CPANEL_API_TOKEN != '' }}"
-      run: |
-        # Add current IP to SSH access list using cPanel API
-        curl -H "Authorization: cpanel ${{ env.CPANEL_USER }}:${{ secrets.CPANEL_API_TOKEN }}" \
-          -X POST \
-          "https://${{ env.CPANEL_HOST }}:2083/execute/SSH/authorize_keys" \
-          -d "ip=${{ steps.ip.outputs.ip }}" \
-          -d "comment=GitHub Actions Deploy" || echo "SSH IP add failed, continuing with FTP"
-        
     - name: Deploy via FTP
       uses: SamKirkland/FTP-Deploy-Action@v4.3.4
       with:
@@ -350,15 +332,6 @@ jobs:
         # Wait for restart
         sleep 10
         
-    - name: Remove IP from cPanel SSH Access (cleanup)
-      if: ${{ always() && secrets.CPANEL_API_TOKEN }}
-      run: |
-        # Remove IP from SSH access list
-        curl -H "Authorization: cpanel ${{ env.CPANEL_USER }}:${{ secrets.CPANEL_API_TOKEN }}" \
-          -X POST \
-          "https://${{ env.CPANEL_HOST }}:2083/execute/SSH/delete_key" \
-          -d "ip=${{ steps.ip.outputs.ip }}" || echo "SSH IP cleanup failed"
-        
     - name: Health Check
       run: |
         echo "Waiting for application to start..."
@@ -373,6 +346,33 @@ jobs:
         
     - name: Deployment Summary
       if: always()
+      run: |
+        echo "📋 Deployment Summary:"
+        echo "🌐 Site URL: ${{ env.SITE_URL }}"
+        echo "📁 Deploy Path: ${{ env.DEPLOY_PATH }}"
+        echo "⚙️  Node.js Version: ${{ env.NODE_VERSION }}"
+        echo ""
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "✅ Deployment completed successfully!"
+          echo ""
+          echo "🔧 Next Steps:"
+          echo "1. Login to cPanel at https://${{ env.CPANEL_HOST }}:2083"
+          echo "2. Go to 'Node.js App' section"
+          echo "3. Configure environment variables (see CPANEL_SETUP.md)"
+          echo "4. Install dependencies: npm install"
+          echo "5. Start/restart the application"
+          echo "6. Check application logs for any errors"
+          echo ""
+          echo "📚 Setup Guide: Check CPANEL_SETUP.md in your deployment directory"
+        else
+          echo "❌ Deployment failed!"
+          echo ""
+          echo "🔍 Troubleshooting:"
+          echo "1. Check FTP credentials"
+          echo "2. Verify cPanel API token (optional)"
+          echo "3. Ensure Node.js app is created in cPanel"
+          echo "4. Check file permissions on server"
+        fi
       run: |
         echo "📋 Deployment Summary:"
         echo "🌐 Site URL: ${{ env.SITE_URL }}"
