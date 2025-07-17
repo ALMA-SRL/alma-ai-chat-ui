@@ -8,7 +8,7 @@ on:
 env:
   NODE_VERSION: '22'
   CPANEL_HOST: 'ftp.alma.com.do'
-  CPANEL_USER: 'llibrechat@chat.alma.com.do'
+  CPANEL_USER: 'librechat@chat.alma.com.do'
   DEPLOY_PATH: '/home/itxl0055/public_html/alma.com.do/chat'
   VENV_PATH: '/home/itxl0055/nodevenv/public_html/alma.com.do/chat/22'
   SITE_URL: 'https://chat.alma.com.do'
@@ -20,6 +20,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 1  # Shallow clone for faster checkout
       
     - name: Setup Node.js
       uses: actions/setup-node@v4
@@ -27,8 +29,20 @@ jobs:
         node-version: ${{ env.NODE_VERSION }}
         cache: 'npm'
         
+    - name: Cache node modules
+      uses: actions/cache@v4
+      id: cache-node-modules
+      with:
+        path: |
+          node_modules
+          ~/.npm
+        key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+        restore-keys: |
+          ${{ runner.os }}-node-
+        
     - name: Install dependencies
-      run: npm ci
+      if: steps.cache-node-modules.outputs.cache-hit != 'true'
+      run: npm ci --prefer-offline --no-audit --no-fund
       
     - name: Create build environment file
       run: |
@@ -43,33 +57,47 @@ jobs:
         echo "DOMAIN_CLIENT=${{ env.SITE_URL }}" >> .env
         echo "DOMAIN_SERVER=${{ env.SITE_URL }}" >> .env
         
+    - name: Cache build outputs
+      uses: actions/cache@v4
+      id: cache-build
+      with:
+        path: |
+          client/dist
+          dist
+          build
+        key: ${{ runner.os }}-build-${{ hashFiles('**/package-lock.json') }}-${{ hashFiles('client/**', 'src/**', 'public/**') }}
+        restore-keys: |
+          ${{ runner.os }}-build-
+          
     - name: Build frontend
-      run: npm run frontend
+      if: steps.cache-build.outputs.cache-hit != 'true'
+      run: |
+        # Set NODE_OPTIONS for better performance
+        export NODE_OPTIONS="--max-old-space-size=4096"
+        npm run frontend
       
     - name: Create deployment package
       run: |
         # Create deployment directory structure
         mkdir -p deploy-package
         
-        # Copy built client files
+        # Copy built client files (use rsync for better performance)
         if [ -d "client/dist" ]; then
-          cp -r client/dist/* deploy-package/
+          rsync -av --exclude='*.map' client/dist/ deploy-package/
         elif [ -d "dist" ]; then
-          cp -r dist/* deploy-package/
+          rsync -av --exclude='*.map' dist/ deploy-package/
         elif [ -d "build" ]; then
-          cp -r build/* deploy-package/
+          rsync -av --exclude='*.map' build/ deploy-package/
         fi
         
-        # Copy server files and configurations
-        cp -r api deploy-package/ 2>/dev/null || echo "No api directory found"
-        cp package*.json deploy-package/
-        cp .env.example deploy-package/
+        # Copy server files and configurations efficiently
+        [ -d "api" ] && rsync -av --exclude='node_modules' --exclude='*.log' api/ deploy-package/api/
+        cp package*.json deploy-package/ 2>/dev/null || true
+        cp .env.example deploy-package/ 2>/dev/null || true
         
         # Copy additional necessary files
-        cp -r config deploy-package/ 2>/dev/null || true
-        cp -r docs deploy-package/ 2>/dev/null || true
-        cp -r images deploy-package/ 2>/dev/null || true
-        cp -r client/public deploy-package/public 2>/dev/null || true
+        [ -d "config" ] && rsync -av config/ deploy-package/config/
+        [ -d "client/public" ] && rsync -av client/public/ deploy-package/public/
         
         # Create Node.js app startup file for cPanel
         cat > deploy-package/app.js << 'EOF'
@@ -303,6 +331,9 @@ jobs:
         protocol: ftp
         local-dir: ./deploy-package/
         server-dir: /home/itxl0055/public_html/alma.com.do/chat/
+        state-name: .ftp-deploy-sync-state.json
+        dry-run: false
+        log-level: minimal
         exclude: |
           **/.git*
           **/.git*/**
@@ -318,6 +349,7 @@ jobs:
           **/Thumbs.db
           **/startup.sh
           **/CPANEL_SETUP.md
+          **/*.map
           
     - name: Restart Node.js App via cPanel API
       if: vars.CPANEL_API_TOKEN != ''
