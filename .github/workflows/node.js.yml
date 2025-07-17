@@ -234,7 +234,7 @@ jobs:
         #!/bin/bash
         
         # Navigate to app directory
-        cd /home/itxl0055/public_html/alma.com.do/chat
+        cd chat
         
         # Activate Node.js virtual environment
         source /home/itxl0055/nodevenv/public_html/alma.com.do/chat/22/bin/activate
@@ -332,7 +332,7 @@ jobs:
         port: 21
         protocol: ftp
         local-dir: ./deploy-package/
-        server-dir: /home/itxl0055/public_html/alma.com.do/chat/
+        server-dir: chat/
         state-name: .ftp-deploy-sync-state.json
         dry-run: false
         log-level: minimal
